@@ -120,39 +120,80 @@ lenrand = 0
 
 #Load in a subset of the total gadget snapshot. 
 #TODO: this is hard-coded for Sherlock and Aemulus but should change for generic N-body sims.
-for i in range(16*rank, 16*(rank+1)):
-    gadgetsnap = readGadgetSnapshot(fdir+'%s'%i, read_id=True, read_pos=True)
+if configs['sim_type']=="Gadget":
+    for i in range(16*rank, 16*(rank+1)):
+        gadgetsnap = readGadgetSnapshot(fdir+'%s'%i, read_id=True, read_pos=True)
 
-    gadgetpos = gadgetsnap[1]
+        gadgetpos = gadgetsnap[1]
 
-    gadgetidx = gadgetsnap[2]
-    if i == 16*rank:
-        posvec = 1.*gadgetpos
-        idvec = 1.*gadgetidx
-        mpiprint('here!')
-        mpiprint(posvec.shape)
-    else:
-        posvec = np.vstack((posvec, gadgetpos))
-        idvec = np.hstack((idvec, gadgetidx))
-    lenrand+=len(gadgetpos)
-    del gadgetsnap
-    gc.collect()
+        gadgetidx = gadgetsnap[2]
+        if i == 16*rank:
+            posvec = 1.*gadgetpos
+            idvec = 1.*gadgetidx
+            mpiprint('here!')
+            mpiprint(posvec.shape)
+        else:
+            posvec = np.vstack((posvec, gadgetpos))
+            idvec = np.hstack((idvec, gadgetidx))
+        lenrand+=len(gadgetpos)
+        del gadgetsnap
+        gc.collect()
+
+
+elif configs['sim_type']=="illustris":
+    fdirnew = "/".join(fdir.split("/")[:-2])
+    snapnum = eval(fdir[-4:-1])
+    infoma = il.snapshot.loadSubset(fdirnew,snapnum ,'dm',['Coordinates', 'ParticleIDs']);
+    posvec = 1.*infoma['Coordinates']/1E3 #Mpc/h)
+    idvec = 1.*infoma['ParticleIDs']
+    mpiprint('here!')
+    mpiprint(posvec.shape)
+
+    
+else:
+    raise NotImplementedError("{0} not implemented ".format(configs['sim_type']))
+
 
 
 #Gadget has IDs starting with ID=1. 
 #FastPM has ID=0
 #idfac decides which one to use
 idfac = 1
-if configs['sim_type'] == 'FastPM':
-    idfac = 0
+if configs['sim_type']=="Gadget" | configs['sim_type'] == 'FastPM':
+    if configs['sim_type'] == 'FastPM':
+        idfac = 0
 
-a_ic = ((idvec-idfac)//nmesh**2)%nmesh
-b_ic = ((idvec-idfac)//nmesh)%nmesh
-c_ic = (idvec-idfac)%nmesh
-mpiprint(a_ic[3])
-a_ic = a_ic.astype(int)
-b_ic = b_ic.astype(int)
-c_ic = c_ic.astype(int)
+    a_ic = ((idvec-idfac)//nmesh**2)%nmesh
+    b_ic = ((idvec-idfac)//nmesh)%nmesh
+    c_ic = (idvec-idfac)%nmesh
+    mpiprint(a_ic[3])
+    a_ic = a_ic.astype(int)
+    b_ic = b_ic.astype(int)
+    c_ic = c_ic.astype(int)
+elif configs['sim_type']=="illustris":
+    glass = readGadgetSnapshot(configs['glass'],print_header=True,read_pos=True, read_vel=False,read_id=False, single_type=1) 
+    TileFac = configs['TileFac']
+    lenpos = len(glass[1])
+    Box=Lbox*1000
+    def IDmapping(ID):
+        length = ID-1
+        i = (length%TileFac)
+        length = (length-i)/TileFac
+        j = length%TileFac
+        length = (length-j)/TileFac
+        m = (length%lenpos).astype(int)
+        k = (length-m)/lenpos
+        print(k,j,i,m)
+        x,y,z = (cat2[1][m,0]/TileFac+ k * (Box / TileFac)),(cat2[1][m,1]/TileFac+ j * (Box / TileFac)),(cat2[1][m,2]/TileFac+ i* (Box / TileFac))
+        return x,y,z
+    x_ic, y_ic, z_ic = IDmapping(idvec)
+    meshlength = Box/nmesh
+    a_ic = int(x_ic/meshlength)%nmesh
+    b_ic = int(y_ic/meshlength)%nmesh
+    c_ic = int(z_ic/meshlength)%nmesh
+    
+else:
+    raise NotImplementedError("{0} not implemented ".format(configs['sim_type']))
 #Figure out where each particle position is going to be distributed among mpi ranks
 layout = pm.decompose(posvec)
 
