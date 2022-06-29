@@ -14,6 +14,9 @@ import os
 import yaml
 from mpi4py import MPI
 from common_functions import readGadgetSnapshot
+import h5py
+import glob
+
 def get_memory(rank):
     process = psutil.Process(os.getpid())
     print(process.memory_info().rss/1e9, "GB is current memory usage, rank ", rank)  # in bytes 
@@ -141,15 +144,27 @@ if configs['sim_type']=="Gadget":
 
 
 elif configs['sim_type']=="illustris":
-    fdirnew = "/".join(fdir.split("/")[:-2])
-    snapnum = eval(fdir[-4:-1])
-    infoma = il.snapshot.loadSubset(fdirnew,snapnum ,'dm',['Coordinates', 'ParticleIDs']);
-    posvec = 1.*infoma['Coordinates']/1E3 #Mpc/h)
-    idvec = 1.*infoma['ParticleIDs']
-    mpiprint('here!')
-    mpiprint(posvec.shape)
-
-    
+    if "downsamplefactor" in configs.keys():
+       downsamplefactor = configs["downsamplefactor"]
+    else:
+        downsamplefactor = 1
+    filesname = glob.glob(fdir+"*")
+    split = np.array_split(np.array(filesname), nranks)
+    i = rank
+    for j, fin in enumerate(split[i]):
+        infoma = h5py.File(fin)
+        gadgetpos = 1.*infoma['PartType1/Coordinates'][::downsamplefactor]/1E3
+        gadgetidx = 1*infoma['PartType1/ParticleIDs'][::downsamplefactor] 
+        if j==0:
+            posvec = gadgetpos
+            idvec = gadgetidx 
+        else:
+            posvec = np.vstack((posvec, gadgetpos))
+            idvec = np.hstack((idvec, gadgetidx))
+        mpiprint('here i={0}, j={1}!'.format(i,j))
+        mpiprint(posvec.shape)
+    box_scale= 1/(infoma['Header'].attrs['Redshift']+1)
+    mpiprint(box_scale) 
 else:
     raise NotImplementedError("{0} not implemented ".format(configs['sim_type']))
 
@@ -159,7 +174,7 @@ else:
 #FastPM has ID=0
 #idfac decides which one to use
 idfac = 1
-if configs['sim_type']=="Gadget" | configs['sim_type'] == 'FastPM':
+if (configs['sim_type']=="Gadget") | (configs['sim_type'] == 'FastPM'):
     if configs['sim_type'] == 'FastPM':
         idfac = 0
 
@@ -183,14 +198,14 @@ elif configs['sim_type']=="illustris":
         length = (length-j)/TileFac
         m = (length%lenpos).astype(int)
         k = (length-m)/lenpos
-        print(k,j,i,m)
-        x,y,z = (cat2[1][m,0]/TileFac+ k * (Box / TileFac)),(cat2[1][m,1]/TileFac+ j * (Box / TileFac)),(cat2[1][m,2]/TileFac+ i* (Box / TileFac))
+        x,y,z = (glass[1][m,0]/TileFac+ k * (Box / TileFac)),(glass[1][m,1]/TileFac+ j * (Box / TileFac)),(glass[1][m,2]/TileFac+ i* (Box / TileFac))
         return x,y,z
+    mpiprint("mapping ID")
     x_ic, y_ic, z_ic = IDmapping(idvec)
     meshlength = Box/nmesh
-    a_ic = int(x_ic/meshlength)%nmesh
-    b_ic = int(y_ic/meshlength)%nmesh
-    c_ic = int(z_ic/meshlength)%nmesh
+    a_ic = (x_ic/meshlength).astype(int)%nmesh
+    b_ic = (y_ic/meshlength).astype(int)%nmesh
+    c_ic = (z_ic/meshlength).astype(int)%nmesh
     
 else:
     raise NotImplementedError("{0} not implemented ".format(configs['sim_type']))
@@ -277,16 +292,27 @@ labelvec = ['1',r'$\delta_L$',  r'$\delta^2$',  r'$s^2$',r'$\nabla^2\delta$']
 
 #Get the box redshift and cosmology to compute the growth factor. 
 #This is currently hard-coded to work with AEMULUS only. Make more general
-box_scale = readGadgetSnapshot(fdir+'0')[2]
+if (configs['sim_type']=="Gadget") | (configs['sim_type'] == 'FastPM'):
+    box_scale = readGadgetSnapshot(fdir+'0')[2]
 zbox = 1./box_scale - 1
 #Get growth factor 
-if 'Test' in fdir:
-    cosmofiles = pd.read_csv('/home/users/swmclau2/Git/pearce/pearce/mocks/test_cosmos.txt', sep=' ')
-    boxcosmo = cosmofiles.iloc[boxno]
+if (configs['sim_type']=="Gadget") | (configs['sim_type'] == 'FastPM'):
+    if 'Test' in fdir:
+        cosmofiles = pd.read_csv('/home/users/swmclau2/Git/pearce/pearce/mocks/test_cosmos.txt', sep=' ')
+        boxcosmo = cosmofiles.iloc[boxno]
+    else:
+        cosmofiles = pd.read_csv('/home/users/kokron/Projects/lakelag/cosmos.txt', sep=' ')
+        boxcosmo = cosmofiles.iloc[boxno]
+    cosmo = pyccl.Cosmology(Omega_b= boxcosmo['ombh2']/(boxcosmo['H0']/100)**2, Omega_c = boxcosmo['omch2']/(boxcosmo['H0']/100)**2, h = boxcosmo['H0']/100, n_s = boxcosmo['ns'], w0=boxcosmo['w0'], Neff=boxcosmo['Neff'],sigma8 = boxcosmo['sigma8'])
+
+elif configs['sim_type']=="illustris":
+    boxcosmo =  configs['cosmo']
+    cosmo = pyccl.Cosmology(Omega_b= boxcosmo['ombh2']/(boxcosmo['H0']/100)**2, Omega_c = boxcosmo['omch2']/(boxcosmo['H0']/100)**2, h = boxcosmo['H0']/100, n_s = boxcosmo['ns'], w0=boxcosmo['w0'], Neff=boxcosmo['Neff'],sigma8 = boxcosmo['sigma8'])
+
 else:
-    cosmofiles = pd.read_csv('/home/users/kokron/Projects/lakelag/cosmos.txt', sep=' ')
-    boxcosmo = cosmofiles.iloc[boxno]
-cosmo = pyccl.Cosmology(Omega_b= boxcosmo['ombh2']/(boxcosmo['H0']/100)**2, Omega_c = boxcosmo['omch2']/(boxcosmo['H0']/100)**2, h = boxcosmo['H0']/100, n_s = boxcosmo['ns'], w0=boxcosmo['w0'], Neff=boxcosmo['Neff'],sigma8 = boxcosmo['sigma8'])
+    raise NotImplementedError("{0} not implemented ".format(configs['sim_type']))
+    
+
 
 
 #Aemulus boxes have IC at z=49
