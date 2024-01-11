@@ -22,7 +22,7 @@ This script generates a numpy array of the noiseless ICs from all of the individ
 # fdir = glob('/nfs/slac/g/ki/ki22/cosmo/beckermr/tinkers_emu/Box000/output/snapdir_009/snapshot_009.*')
 
 yamldir = sys.argv[1]
-configs = yaml.load(open(yamldir, 'r'))
+configs = yaml.safe_load(open(yamldir, 'r'), )
 
 icdir = configs['icdir']
 outdir = configs['outdir']

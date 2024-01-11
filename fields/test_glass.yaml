@@ -1,0 +1,52 @@
+##Locations of files
+
+#Location of the IC binary files
+icdir:
+
+#Output directory where all products should be saved
+outdir: '/home/users/chto/code/HOD_bias/datascratch/L205n2500TNG_DM_lagrange/test_glass/'
+
+#Directory with gadget snapshot files 
+particledir: '/home/users/chto/code/HOD_bias/datascratch/L205n2500TNG_DM_lagrange/test_glass/late/ICs.'
+
+##Simulation parameters
+
+#mesh size used to generate ICs
+nmesh_in: 1250
+
+#mesh size to output the final fields/measure p(k)
+nmesh_out: 625
+
+#Size of the simulation box in Mpc/h
+lbox: 205
+
+#Initial redshift of the box
+z_ic: 127
+TileFac: 5
+glass: "/home/users/chto/code/N-GenIC/DylanIllustris/gadget_glass_125.dat" 
+
+##Advection paramters
+
+#Compensate for the CIC window functions or not
+compensate: True
+
+#'Gadget' or 'FastPM'. For now only 'Gadget' is supported. Sorry!
+sim_type: 'illustris'
+sim_in_type: "Gadget"
+
+#Write the IC weight fields as numpy arrays instead of h5 files. This will just take more time and delete the hdf5 file.
+np_weightfields: True
+
+aem_box: 1
+cosmo:
+    ombh2: 0.02230 
+    H0: 67.74
+    omch2: 0.11944 
+    ns: 0.9667
+    w0: -1.0
+    Neff: 3.046
+    sigma8: 0.8159
+
+downsamplefactor: 1
+    
+

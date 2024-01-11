@@ -175,7 +175,6 @@ else:
             del gadgetsnap
             gc.collect()
 
-
     elif configs['sim_type']=="illustris":
         if "downsamplefactor" in configs.keys():
            downsamplefactor = configs["downsamplefactor"]
@@ -219,69 +218,9 @@ else:
 
 
 
-#Gadget has IDs starting with ID=1. 
-#FastPM has ID=0
-#idfac decides which one to use
-idfac = 1
-if (configs['sim_type']=="Gadget") | (configs['sim_type'] == 'FastPM'):
-    if configs['sim_type'] == 'FastPM':
-        idfac = 0
-
-    a_ic = ((idvec-idfac)//nmesh**2)%nmesh
-    b_ic = ((idvec-idfac)//nmesh)%nmesh
-    c_ic = (idvec-idfac)%nmesh
-    mpiprint(a_ic[3])
-    a_ic = a_ic.astype(int)
-    b_ic = b_ic.astype(int)
-    c_ic = c_ic.astype(int)
-elif configs['sim_type']=="illustris":
-    glass = readGadgetSnapshot(configs['glass'],print_header=True,read_pos=True, read_vel=False,read_id=False, single_type=1) 
-    TileFac = configs['TileFac']
-    lenpos = len(glass[1])
-    Box=Lbox*1000
-    def IDmapping(ID):
-        length = ID-1
-        i = (length%TileFac)
-        length = (length-i)/TileFac
-        j = length%TileFac
-        length = (length-j)/TileFac
-        m = (length%lenpos).astype(int)
-        k = (length-m)/lenpos
-        x,y,z = (glass[1][m,0]/TileFac+ k * (Box / TileFac)),(glass[1][m,1]/TileFac+ j * (Box / TileFac)),(glass[1][m,2]/TileFac+ i* (Box / TileFac))
-        return x/1E3,y/1E3,z/1E3
-    mpiprint("mapping ID")
-    if idvec is not None:
-        x_ic, y_ic, z_ic = IDmapping(idvec)
-        posarr = np.array([x_ic, y_ic, z_ic],dtype=np.float32).T
-        mpiprint("maxic{0}".format(np.max(x_ic)))
-        #del x_ic
-        #del y_ic
-        #del z_ic
-        gc.collect()
-    else:
-        pass 
-    meshlength = Box/nmesh/1000
-    a_ic = (x_ic/meshlength).astype(int)%nmesh
-    b_ic = (y_ic/meshlength).astype(int)%nmesh
-    c_ic = (z_ic/meshlength).astype(int)%nmesh
-    
-else:
-    raise NotImplementedError("{0} not implemented ".format(configs['sim_type']))
-#Figure out where each particle position is going to be distributed among mpi ranks
-if idvec is not None:
-    layout = pm.decompose(posvec)
-    del idvec
-    del gadgetpos
-    del gadgetidx
-    #del glass
-    gc.collect()
-
-
-
+layout = pm.decompose(posvec)
 #Exchange positions
-mpiprint(('posvec shapes', posvec.shape))
 p = layout.exchange(posvec)
-
 del posvec
 gc.collect()
 
@@ -295,39 +234,31 @@ for k in range(len(fieldlist)):
     if rank==0:
         print(k,flush=True)
     if k == 0:
-        continue
         pm.paint(p, out=fieldlist[k], mass = 1, resampler='cic')
         print("done", flush=True)
-        #print(fieldlist[0].cmean())
-        #assert(0)
+        norm = fieldlist[0].cmean() 
+        print("norm {0}".format(norm), flush=True)
     else:
-        #Now only load specific compfield. 1,2,3 is delta, delta^2, s^2
-
-        # compfield = np.load(componentdir+'reshape_componentfields_%s_%s.npy'%(rank,k), mmap_mode='r')
-        #Load in the given weight field
-        #arr = np.load(lindir+keynames[k]+'_np_chto.npy', mmap_mode='r')
-
-        fnames = np.sort(glob.glob(lindir+keynames[k]+'_np_chto.npy.*.npy'))
+        fnames = np.sort(glob.glob(lindir+keynames[k]+'_np.npy.*.npy'))
         for i in range(len(fnames)):
-            fname = lindir+keynames[k]+'_np_chto.npy.{0}.npy'.format(i)
+            fname = lindir+keynames[k]+'_np.npy.{0}.npy'.format(i)
             if i==0:
                 arr = np.load(fname, mmap_mode='r')
             else:
                 arr = np.r_[arr, np.load(fname, mmap_mode='r')]
-                print(arr.shape, flush=True)
         print("loading done", rank, flush=True)
         ##Get weights
-        #w = np.zeros(posarr.shape[0], dtype=np.float32)
-        #MASL.CIC_interp(arr, Lbox, posarr, w)
+        w = arr[idvec.astype(int)-1]
        
-        w = arr[a_ic, b_ic, c_ic]
+        del arr
+        gc.collect()
+        #w = arr[a_ic, b_ic, c_ic]
         mpiprint(('w shapes', w.shape))
 
         #distribute weights properly
         m = layout.exchange(w)
         mpiprint(('exchange done'))
         del w
-        del arr
         gc.collect()
         get_memory(rank)
         pm.paint(p, out=fieldlist[k], mass = m, resampler='cic')
@@ -349,15 +280,17 @@ get_memory(rank)
 
 #Normalize and mean-subtract the normal aprticle field.
 norm = fieldlist[0].cmean() 
+print(norm)
 for k in range(len(fieldlist)):
+    fieldlist[k] -= fieldlist[k].cmean()
     fieldlist[k] /= norm
-fieldlist[0] -= 1
+#fieldlist[0] -= 1
 
 for k in range(len(fieldlist)):
     if rank==0:
         print(np.mean(fieldlist[k].value), np.std(fieldlist[k].value))
         sys.stdout.flush()
-    np.save(componentdir+'latetime_weight_%s_%s_%s_rank%s'%(k,nmesh,fieldnameadd,rank), fieldlist[k].value)
+    np.save(componentdir+'latetime_weight_%s_%s_%s_%s_rank%s'%(k,nmesh,nmeshout,fieldnameadd,rank), fieldlist[k].value)
     if compensate:
         fieldlist[k] = fieldlist[k].r2c()
         fieldlist[k] = fieldlist[k].apply(CompensateCICAliasing, kind='circular')
@@ -438,7 +371,7 @@ for i in range(4):
 kpkvec = np.array(kpkvec)
 #rxivec = np.array(rxivec)
 if rank==0:
-    np.savetxt(componentdir+'lakelag_mpi_pk_box%s_a%.2f_nmesh%s_%s.txt'%(boxno,box_scale,nmesh, fieldnameadd), kpkvec)
+    np.savetxt(componentdir+'lakelag_mpi_pk_box%s_a%.2f_nmesh%s_nmeshout%s_%s.txt'%(boxno,box_scale,nmesh, nmeshout, fieldnameadd), kpkvec)
     #np.savetxt(componentdir+'lakelag_mpi_xi_box%s_snap%s_nmesh%s.txt'%(boxno,snapdir,nmesh), rxivec)
     # os.system('rm -r '+componentdir+'reshape_componentfields_*')
     #os.system('rm -r '+componentdir+'componentfields_*')

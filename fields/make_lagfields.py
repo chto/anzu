@@ -52,7 +52,7 @@ def delta_to_tidesq(delta_k, nmesh, lbox, rank, nranks, fft):
     kvalsmpi = kvals[rank*nmesh//nranks:(rank+1)*nmesh//nranks]
     kvalsr = np.fft.rfftfreq(nmesh)*(2*np.pi*nmesh)/lbox
 
-    kx, ky, kz = np.meshgrid(kvalsmpi,kvals,  kvalsr)
+    kx, ky, kz = np.meshgrid(kvalsmpi,kvals,  kvalsr, sparse=True)
     if rank==0:
         print(kvals.shape, kvalsmpi.shape, kvalsr.shape, "shape of x, y, z")
 
@@ -86,6 +86,8 @@ def delta_to_tidesq(delta_k, nmesh, lbox, rank, nranks, fft):
         # real_out = fft_tide.view('float32')[:,:,:nmesh]
         # complex_in = fft_tide[:,:,:]
         # print(fft_tide.shape, real_out.shape, complex_in.shape)
+        print(i, real_out.shape, real_out, flush=True)
+        print("#"*10, flush=True)
         tidesq += 1.*real_out**2
         if jvec[i][0] != jvec[i][1]:
             tidesq+= 1.*real_out**2
@@ -137,7 +139,7 @@ def delta_to_gradsqdelta(delta_k, nmesh, lbox, rank, nranks, fft):
     return real_gradsqdelta
 if __name__ == "__main__":
     yamldir = sys.argv[1]
-    configs = yaml.load(open(yamldir, 'r'))
+    configs = yaml.safe_load(open(yamldir, 'r'))
 
     lindir = configs['outdir']
 
@@ -161,71 +163,73 @@ if __name__ == "__main__":
         print('Have you run ic_binary_to_field.py yet? Did not find the right file.')
     #print(rank*nmesh//nranks,(rank+1)*nmesh//nranks)
     u = newDistArray(fft, False)
-
     #Slab-decompose the noiseless ICs along the distributed array 
     u[:] = bigmesh[rank*nmesh//nranks:(rank+1)*nmesh//nranks, :, :].astype(u.dtype)
-
-    #Compute the delta^2 field. This operation is local in real space.
-    d2 = newDistArray(fft, False)
-    d2[:] = u*u
-    dmean = MPI_mean(d2)
-
-    #Mean-subtract delta^2 
-    d2 -= dmean
-    if rank==0:
-        print(dmean, ' mean deltasq')
-
-    #Parallel-write delta^2 to hdf5 file
-    d2.write(lindir+'mpi_icfields_nmesh%s.h5'%nmesh, 'deltasq', step=2)
-
-    #Free up memory
-    del d2,dmean
+    del bigmesh
     gc.collect()
 
-    #Write the linear density field to hdf5
-    u.write(lindir+'mpi_icfields_nmesh%s.h5'%nmesh, 'delta', step=2)
+    if False:
+        #Compute the delta^2 field. This operation is local in real space.
+        d2 = newDistArray(fft, False)
+        d2[:] = u*u
+        dmean = MPI_mean(d2)
 
-    #Take a forward FFT of the linear density
-    u_hat = fft.forward(u, normalize=True)
-    if rank==0:
-        print('Did backwards FFT')
+        #Mean-subtract delta^2 
+        d2 -= dmean
+        if rank==0:
+            print(dmean, ' mean deltasq', flush=True)
 
-    #Make a copy of FFT'd linear density. Will be used to make s^2 field.
-    deltak = u_hat.copy()
-    if rank==0:
-        print('Did array copy')
-    tinyfft = delta_to_tidesq(deltak, nmesh, Lbox, rank, nranks, fft)
-    if rank==0:
-        print('Made the tidesq field')
+        #Parallel-write delta^2 to hdf5 file
+        d2.write(lindir+'mpi_icfields_nmesh%s.h5'%nmesh, 'deltasq', step=2)
 
-    #Populate output with distarray
-    v = newDistArray(fft, False)
+        #Free up memory
+        del d2,dmean
+        gc.collect()
 
-    v[:] = tinyfft
+        #Write the linear density field to hdf5
+        u.write(lindir+'mpi_icfields_nmesh%s.h5'%nmesh, 'delta', step=2)
+    if True:
+        #Take a forward FFT of the linear density
+        u_hat = fft.forward(u, normalize=True)
+        if rank==0:
+            print('Did backwards FFT', flush=True)
 
-    #Need to compute mean value of tidesq to subtract:
-    vmean = MPI_mean(v)
-    if rank==0:
-        print(vmean, ' mean tidesq')
-    v -= vmean
+        #Make a copy of FFT'd linear density. Will be used to make s^2 field.
+        deltak = u_hat #u_hat.copy()
+        if rank==0:
+            print('Did array copy',flush=True)
+        tinyfft = delta_to_tidesq(deltak, nmesh, Lbox, rank, nranks, fft)
+        if rank==0:
+            print('Made the tidesq field',flush=True)
 
-    v.write(lindir+'mpi_icfields_nmesh%s.h5'%nmesh, 'tidesq', step=2)
+        #Populate output with distarray
+        v = newDistArray(fft, False)
 
-    #clear up space yet again
-    del v, tinyfft,vmean
-    gc.collect()
+        v[:] = tinyfft
 
-    #Now make the nablasq field
-    v = newDistArray(fft, False)
- 
-    nablasq = delta_to_gradsqdelta(deltak, nmesh, Lbox, rank, nranks, fft)
+        #Need to compute mean value of tidesq to subtract:
+        vmean = MPI_mean(v)
+        if rank==0:
+            print(vmean, ' mean tidesq')
+        v -= vmean
 
-    v[:] = nablasq 
+        v.write(lindir+'mpi_icfields_nmesh%s.h5'%nmesh, 'tidesq', step=2)
 
-    v.write(lindir+'mpi_icfields_nmesh%s.h5'%nmesh, 'nablasq', step=2)
-    #Moar space
-    del u, bigmesh, deltak, u_hat,fft,v
-    gc.collect()
+        #clear up space yet again
+        del v, tinyfft,vmean
+        gc.collect()
+
+        #Now make the nablasq field
+        v = newDistArray(fft, False)
+     
+        nablasq = delta_to_gradsqdelta(deltak, nmesh, Lbox, rank, nranks, fft)
+
+        v[:] = nablasq 
+
+        v.write(lindir+'mpi_icfields_nmesh%s.h5'%nmesh, 'nablasq', step=2)
+        #Moar space
+        del u, deltak, u_hat,fft,v
+        gc.collect()
 
     if configs['np_weightfields']:
 
